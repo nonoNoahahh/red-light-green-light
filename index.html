@@ -1,0 +1,281 @@
+  <!DOCTYPE html>
+  <html>
+  <head>
+      <title>Green Light Red Light - Motion Detection</title>
+      <style>
+          #video {
+              transform: scaleX(-1);
+              width: 640px;
+              height: 480px;
+          }
+          #status {
+              font-size: 24px;
+              font-weight: bold;
+              margin: 20px;
+          }
+          .green {
+              color: green;
+          }
+          .red {
+              color: red;
+          }
+          #capturedImage {
+              margin-top: 10px;
+          }
+          #faceBox {
+              position: absolute;
+              border: 3px solid red;
+              pointer-events: none;
+          }
+          .game-over {
+              animation: fadeOut 1s ease-out forwards;
+          }
+          @keyframes fadeOut {
+              from { opacity: 1; }
+              to { opacity: 0; }
+          }
+      </style>
+  </head>
+  <body>
+      <video id="video" autoplay></video>
+      <canvas id="motion" style="display:none"></canvas>
+      <div id="status">Get Ready!</div>
+      <div id="score">Score: 0</div>
+      <div id="timer">Time: 50</div>
+      <canvas id="capturedImage"></canvas>
+      <div id="faceBox"></div>
+
+      <script>
+          const video = document.getElementById('video');
+          const canvas = document.getElementById('motion');
+          const ctx = canvas.getContext('2d');
+          const status = document.getElementById('status');
+          const scoreElement = document.getElementById('score');
+          const timerElement = document.getElementById('timer');
+          const captureCanvas = document.getElementById('capturedImage');
+          const captureCtx = captureCanvas.getContext('2d');
+          const faceBox = document.getElementById('faceBox');
+          let previousFrame;
+          let isGreenLight = true;
+          let score = 0;
+          let gameActive = false;
+          let stream;
+          let canMove = true;
+          let faceDistance = 0;
+          let noFaceDetectedTimeout;
+          let noMotionTimeout;
+          let timeLeft = 50;
+          let gameTimer;
+
+          // Create audio elements
+          const greenLightSound = new Audio();
+          const redLightSound = new Audio();
+          const eliminationSound = new Audio();
+          const silentSound = new Audio('data:audio/wav;base64,UklGRigAAABXQVZFZm10IBIAAAABAAEARKwAAIhYAQACABAAAABkYXRhAgAAAAEA');
+          silentSound.duration = 0.5;
+
+          // Set audio sources using relative paths
+          greenLightSound.src = 'doll-green-light.mp3';
+          redLightSound.src = 'doll-red-light.mp3';
+          eliminationSound.src = 'roblox-death-sound.mp3';
+
+          async function initCamera() {
+              try {
+                  if (stream) {
+                      stream.getTracks().forEach(track => track.stop());
+                  }
+                  stream = await navigator.mediaDevices.getUserMedia({ 
+                      video: {
+                          width: 640,
+                          height: 480
+                      }
+                  });
+                  video.srcObject = stream;
+                  canvas.width = 640;
+                  canvas.height = 480;
+                  captureCanvas.width = 640;
+                  captureCanvas.height = 480;
+
+                  status.textContent = "Camera initialized";
+                  setTimeout(() => {
+                      startGame();
+                      initFaceDetection();
+                  }, 6000);
+              } catch (err) {
+                  console.error('Error accessing camera:', err);
+                  status.textContent = 'Camera error! Please refresh and grant camera permissions.';
+                  status.className = 'red';
+
+                  const retryButton = document.createElement('button');
+                  retryButton.textContent = 'Retry Camera Access';
+                  retryButton.onclick = initCamera;
+                  status.appendChild(document.createElement('br'));
+                  status.appendChild(retryButton);
+              }
+          }
+
+          async function initFaceDetection() {
+              const model = await faceapi.loadSsdMobilenetv1Model('/models');
+              setInterval(async () => {
+                  if (!gameActive) return;
+                  const detections = await faceapi.detectSingleFace(video);
+                  if (detections) {
+                      clearTimeout(noFaceDetectedTimeout);
+                      const { box } = detections;
+                      faceBox.style.left = `${box.x}px`;
+                      faceBox.style.top = `${box.y}px`;
+                      faceBox.style.width = `${box.width}px`;
+                      faceBox.style.height = `${box.height}px`;
+                      faceDistance = box.width * box.height;
+                  } else {
+                      noFaceDetectedTimeout = setTimeout(() => {
+                          if (gameActive) {
+                              gameActive = false;
+                              status.textContent = 'Game Over! No face detected!';
+                              status.className = 'red';
+                              setTimeout(() => {
+                                  startGame();
+                              }, 5000);
+                          }
+                      }, 2000);
+                  }
+              }, 100);
+          }
+
+          initCamera();
+
+          function startGame() {
+              gameActive = true;
+              score = 0;
+              timeLeft = 50;
+              scoreElement.textContent = `Score: ${score}`;
+              timerElement.textContent = `Time: ${timeLeft}`;
+              if (gameTimer) clearInterval(gameTimer);
+              gameTimer = setInterval(() => {
+                  timeLeft--;
+                  timerElement.textContent = `Time: ${timeLeft}`;
+                  if (timeLeft <= 0) {
+                      gameActive = false;
+                      clearInterval(gameTimer);
+                      status.textContent = 'Game Over! Time is up!';
+                      status.className = 'red';
+                      setTimeout(() => {
+                          startGame();
+                      }, 5000);
+                  }
+              }, 1000);
+              status.textContent = 'Green Light!';
+              status.className = 'green';
+              greenLightSound.play();
+              detectMotion();
+              setTimeout(changeLight, 3000 + Math.random() * 1000);
+          }
+
+          function changeLight() {
+              if (!gameActive) return;
+              isGreenLight = !isGreenLight;
+              status.textContent = isGreenLight ? 'Green Light!' : 'Red Light!';
+              status.className = isGreenLight ? 'green' : 'red';
+          
+              if (isGreenLight) {
+                  greenLightSound.play();
+                  canMove = true;
+              } else {
+                  silentSound.play().then(() => {
+                      redLightSound.play();
+                  });
+                  setTimeout(() => {
+                      canMove = false;
+                  }, 500);
+              }
+          
+              const baseInterval = 3000;
+              const minInterval = 1000;
+              const distanceMultiplier = Math.max(0.3, 1 - (faceDistance / 100000));
+              const interval = Math.max(minInterval, baseInterval * distanceMultiplier);
+              
+              setTimeout(changeLight, interval + Math.random() * 1000);
+          }
+
+          function captureMovement(currentFrame, movementMap) {
+              let minX = canvas.width, minY = canvas.height;
+              let maxX = 0, maxY = 0;
+
+              for(let y = 0; y < canvas.height; y++) {
+                  for(let x = 0; x < canvas.width; x++) {
+                      const i = (y * canvas.width + x) * 4;
+                      if(movementMap[y][x]) {
+                          minX = Math.min(minX, x);
+                          minY = Math.min(minY, y);
+                          maxX = Math.max(maxX, x);
+                          maxY = Math.max(maxY, y);
+                      }
+                  }
+              }
+
+              const padding = 20;
+              minX = Math.max(0, minX - padding);
+              minY = Math.max(0, minY - padding);
+              maxX = Math.min(canvas.width, maxX + padding);
+              maxY = Math.min(canvas.height, maxY + padding);
+
+              const width = maxX - minX;
+              const height = maxY - minY;
+              if(width > 0 && height > 0) {
+                  captureCtx.clearRect(0, 0, captureCanvas.width, captureCanvas.height);
+                  captureCtx.drawImage(video, minX, minY, width, height, 0, 0, width, height);
+              }
+          }
+
+          function detectMotion() {
+              ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+              let currentFrame = ctx.getImageData(0, 0, canvas.width, canvas.height);
+
+              if (previousFrame) {
+                  let movement = 0;
+                  let movementMap = Array(canvas.height).fill().map(() => Array(canvas.width).fill(false));
+              
+                  for (let y = 0; y < canvas.height; y++) {
+                      for (let x = 0; x < canvas.width; x++) {
+                          const i = (y * canvas.width + x) * 4;
+                          let diff = Math.abs(currentFrame.data[i] - previousFrame.data[i]) +
+                                   Math.abs(currentFrame.data[i+1] - previousFrame.data[i+1]) +
+                                   Math.abs(currentFrame.data[i+2] - previousFrame.data[i+2]);
+                          if (diff > 100) {
+                              movement++;
+                              movementMap[y][x] = true;
+                          }
+                      }
+                  }
+
+                  if (!canMove && movement > 1000) {
+                      gameActive = false;
+                      clearInterval(gameTimer);
+                      eliminationSound.play();
+                      status.textContent = 'Game Over! You moved after Red Light!';
+                      status.className = 'red';
+                      captureMovement(currentFrame, movementMap);
+
+                      const restartTimeout = setTimeout(() => {
+                          if (!gameActive) {
+                              startGame();
+                          }
+                      }, 5000);
+                      return;
+                  }
+
+                  if (canMove && movement > 1000) {
+                      score += 1;
+                      scoreElement.textContent = `Score: ${score}`;
+                  }
+              }
+
+              previousFrame = currentFrame;
+              if (gameActive) {
+                  requestAnimationFrame(detectMotion);
+              }
+          }
+      </script>
+      <script defer src="https://cdn.jsdelivr.net/npm/face-api.js"></script>
+  </body>
+  </html>
